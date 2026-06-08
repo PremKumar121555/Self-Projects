@@ -1,0 +1,68 @@
+clc;
+clear;
+close all;
+
+% Parameters
+Nbits = 1e5;                 % Number of bits
+SNR_dB = 0:2:30;             % SNR range
+
+BER_ZF = zeros(size(SNR_dB));
+BER_MMSE = zeros(size(SNR_dB));
+
+for k = 1:length(SNR_dB)
+
+    % Generate random bits
+    bits = randi([0 1], Nbits, 1);
+
+    % QPSK Modulation
+    bits_reshape = reshape(bits, 2, []).';
+    symbols = (2*bits_reshape(:,1)-1) + ...
+        1j*(2*bits_reshape(:,2)-1);
+    symbols = symbols/sqrt(2);
+
+    % Rayleigh Channel
+    H = (randn(size(symbols)) + 1j*randn(size(symbols)))/sqrt(2);
+
+    % Noise
+    SNR_linear = 10^(SNR_dB(k)/10);
+    noise_var = 1/SNR_linear;
+
+    noise = sqrt(noise_var/2)* ...
+        (randn(size(symbols)) + 1j*randn(size(symbols)));
+
+    % Received Signal
+    y = H .* symbols + noise;
+
+    %% ZF Equalizer
+    xhat_zf = y ./ H;
+
+    %% MMSE Equalizer
+    W_mmse = conj(H) ./ (abs(H).^2 + noise_var);
+    xhat_mmse = W_mmse .* y;
+
+    % QPSK Demodulation
+    bits_zf = zeros(Nbits,1);
+    bits_mmse = zeros(Nbits,1);
+
+    bits_zf(1:2:end) = real(xhat_zf) > 0;
+    bits_zf(2:2:end) = imag(xhat_zf) > 0;
+
+    bits_mmse(1:2:end) = real(xhat_mmse) > 0;
+    bits_mmse(2:2:end) = imag(xhat_mmse) > 0;
+
+    % BER Calculation
+    BER_ZF(k) = sum(bits ~= bits_zf)/Nbits;
+    BER_MMSE(k) = sum(bits ~= bits_mmse)/Nbits;
+end
+
+% Plot Results
+figure;
+semilogy(SNR_dB, BER_ZF, '-o','LineWidth',2);
+hold on;
+semilogy(SNR_dB, BER_MMSE, '-s','LineWidth',2);
+grid on;
+
+xlabel('SNR (dB)');
+ylabel('Bit Error Rate (BER)');
+title('ZF vs MMSE Equalizer over Rayleigh Channel');
+legend('ZF','MMSE');
