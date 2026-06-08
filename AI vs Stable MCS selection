@@ -1,0 +1,133 @@
+clc; clear; close all;
+
+%% Parameters
+SNR_dB = 0:2:20;
+SNR_lin = 10.^(SNR_dB/10);
+
+doppler = [5 50 200];
+
+feedback_delay = 5;
+numSamples = 200;
+
+%% MCS efficiency
+MCS_eff = [0.2 0.5 1 1.5 2 2.5 3 3.5 4 4.5];
+
+%% Simple AI MODEL (TRAINED OFFLINE - synthetic)
+% Input: [SNR, channel_variation]a
+% Output: MCS index
+
+train_X = [];
+train_Y = [];
+
+for snr = 0:1:20
+    for var = 0:0.5:5
+
+        % rule-based optimal MCS (teacher)
+        if snr < 3 + var
+            mcs = 0;
+        elseif snr < 6 + var
+            mcs = 1;
+        elseif snr < 9 + var
+            mcs = 2;
+        elseif snr < 12 + var
+            mcs = 4;
+        elseif snr < 15 + var
+            mcs = 6;
+        else
+            mcs = 8;
+        end
+
+        train_X = [train_X; snr var];
+        train_Y = [train_Y; mcs];
+
+    end
+end
+
+% Train AI model
+AI_model = fitrensemble(train_X, train_Y, 'Method','Bag');
+
+%% Storage
+throughput_ideal = zeros(length(doppler), length(SNR_dB));
+throughput_delayed = zeros(length(doppler), length(SNR_dB));
+throughput_ai = zeros(length(doppler), length(SNR_dB));
+
+%% Loop Doppler
+for d = 1:length(doppler)
+
+    fd = doppler(d);
+
+    for s = 1:length(SNR_dB)
+
+        snr_avg = SNR_lin(s);
+
+        %% time varying channel
+        channel = snr_avg + sqrt(fd/50)*randn(1,numSamples);
+        channel = max(channel,0.1);
+
+        mcs_ai = zeros(1,numSamples);
+        bler_ai = zeros(1,numSamples);
+
+        mcs_delay = zeros(1,numSamples);
+        bler_delay = zeros(1,numSamples);
+
+        for t = 1:numSamples
+
+            %% instantaneous SNR
+            snr_inst = channel(t);
+
+            %% mobility indicator (channel variation estimate)
+            if t == 1
+                var_est = 0;
+            else
+                var_est = abs(channel(t) - channel(t-1));
+            end
+
+            %% -------------------------
+            % AI-based MCS selection
+            %% -------------------------
+            input_AI = [snr_inst var_est];
+            mcs_ai(t) = round(predict(AI_model, input_AI));
+
+            mcs_ai(t) = max(0,min(9,mcs_ai(t)));
+
+            gamma_ai = snr_inst / (1 + 0.25*mcs_ai(t));
+            bler_ai(t) = exp(-gamma_ai);
+
+            %% -------------------------
+            % Outdated CQI (baseline)
+            %% -------------------------
+            idx = max(1, t-feedback_delay);
+            snr_old = channel(idx);
+
+            mcs_delay(t) = min(9, floor(snr_old/2));
+
+            gamma_d = snr_inst / (1 + 0.25*mcs_delay(t));
+            bler_delay(t) = exp(-gamma_d);
+
+        end
+
+        %% throughput
+        throughput_ai(d,s) = mean(MCS_eff(mcs_ai+1).*(1-bler_ai));
+        throughput_delayed(d,s) = mean(MCS_eff(mcs_delay+1).*(1-bler_delay));
+
+    end
+end
+
+%% ---------------- PLOT ----------------
+figure;
+
+for d = 1:length(doppler)
+
+    subplot(1,length(doppler),d);
+
+    plot(SNR_dB, throughput_delayed(d,:), 'r-s','LineWidth',2); hold on;
+    plot(SNR_dB, throughput_ai(d,:), 'b-o','LineWidth',2);
+
+    xlabel('SNR (dB)');
+    ylabel('Throughput');
+    title(['Doppler = ' num2str(doppler(d)) ' Hz']);
+    grid on;
+
+    legend('CQI delayed','AI-based MCS');
+
+end
