@@ -1,0 +1,91 @@
+clc; clear; close all;
+
+%% Parameters
+
+numBits = 1e4;
+EbN0dB = 0:1:6;
+M = 4;                  % QPSK
+k = log2(M);
+R = 1/3;                % Turbo code rate
+numIter = 8;
+
+Nfft = 64;              % OFDM size
+Nsc  = 48;              % Used subcarriers
+cpLen = 16;
+
+BER = zeros(size(EbN0dB));
+
+%% Turbo encoder/decoder
+trellis = poly2trellis(4,[13 15],13);
+interleaver = randperm(numBits);
+
+turboEnc = comm.TurboEncoder( ...
+    'TrellisStructure', trellis, ...
+    'InterleaverIndices', interleaver);
+
+turboDec = comm.TurboDecoder( ...
+    'TrellisStructure', trellis, ...
+    'InterleaverIndices', interleaver, ...
+    'NumIterations', numIter);
+
+berCalc = comm.ErrorRate;
+
+%% Loop over Eb/N0
+for i = 1:length(EbN0dB)
+
+    %% Transmitter
+    data = randi([0 1], numBits, 1);
+    coded = turboEnc(data);
+
+    % QPSK modulation
+    modSym = pskmod(coded, M, pi/4, 'InputType','bit');
+
+    % DFT-spreading (SC-FDMA)
+    dftOut = fft(modSym, Nsc);
+
+    % Subcarrier mapping
+    ofdmGrid = zeros(Nfft,1);
+    ofdmGrid(2:Nsc+1) = dftOut;
+
+    % OFDM modulation
+    txOFDM = ifft(ofdmGrid, Nfft);
+    txCP = [txOFDM(end-cpLen+1:end); txOFDM];
+
+    %% Channel
+    SNRdB = EbN0dB(i) + 10*log10(R*k);
+    rxCP = awgn(txCP, SNRdB);
+
+    %% Receiver
+    rxOFDM = rxCP(cpLen+1:end);
+    rxGrid = fft(rxOFDM, Nfft);
+
+    % Subcarrier demapping
+    rxDFT = rxGrid(2:Nsc+1);
+
+    % IDFT de-spreading
+    rxSym = ifft(rxDFT, Nsc);
+
+    % Noise variance for LLR
+    noiseVar = 1/(2*R*10^(EbN0dB(i)/10));
+
+    % Soft demodulation
+    llr = pskdemod(rxSym, M, pi/4, ...
+        'OutputType','llr', ...
+        'NoiseVariance', noiseVar);
+
+    % Turbo decoding
+    rxBits = turboDec(llr);
+
+    % BER
+    stats = berCalc(data, rxBits);
+    BER(i) = stats(1);
+    reset(berCalc);
+end
+
+%% Plot
+figure;
+semilogy(EbN0dB, BER, '-o','LineWidth',2);
+grid on;
+xlabel('E_b/N_0 (dB)');
+ylabel('BER');
+title('Uplink SC-FDMA (DFT-s-OFDM) with Turbo Coding');
