@@ -1,0 +1,247 @@
+clc;
+clear;
+close all;
+
+%% ==========================================
+% AI-Native Wireless Optimization
+% Joint Optimization of:
+% 1. SCS
+% 2. MCS
+% 3. Beamforming Gain
+% 4. Power Allocation
+% Objective:
+% Maximize Throughput
+% Minimize BLER + PAPR
+%% ==========================================
+
+%% Dataset Generation
+
+N = 4000;
+
+% Features
+SINR = rand(N,1)*30;          % dB
+doppler = rand(N,1)*1000;     % Hz
+interference = rand(N,1)*20;  % dB
+battery = 20 + rand(N,1)*80;  % %
+
+%% Candidate Parameters
+
+scs_set = [15 30 60 120];
+
+% MCS Index Approximation
+mcs_set = [2 4 6 8];
+
+% Beamforming gains
+beam_gain_set = [0 3 6 9];
+
+labels_scs = zeros(N,1);
+labels_mcs = zeros(N,1);
+labels_beam = zeros(N,1);
+
+%% ==========================================
+% Generate Optimal Labels
+%% ==========================================
+
+for i = 1:N
+
+    best_score = -1000;
+
+    best_scs = 15;
+    best_mcs = 2;
+    best_beam = 0;
+
+    for s = 1:length(scs_set)
+
+        scs = scs_set(s);
+
+        for m = 1:length(mcs_set)
+
+            mcs = mcs_set(m);
+
+            for b = 1:length(beam_gain_set)
+
+                beam = beam_gain_set(b);
+
+                %% Effective SINR
+
+                effective_sinr = SINR(i) + beam - interference(i)/4;
+
+                %% ICI Effect
+
+                ici = doppler(i)/scs;
+
+                %% BLER Approximation
+
+                bler = exp(-(effective_sinr/10)) ...
+                     + 0.001*ici ...
+                     + 0.03*(mcs/8);
+
+                bler = min(bler,1);
+
+                %% Spectral Efficiency
+
+                spectral_eff = mcs;
+
+                %% Throughput
+
+                throughput = spectral_eff ...
+                           * (1-bler);
+
+                %% PAPR Approximation
+
+                papr = 6 + 0.5*mcs + 15/scs;
+
+                %% Power Penalty
+
+                power_penalty = papr*(100-battery(i))/100;
+
+                %% Final AI Objective
+
+                score = throughput ...
+                      - 0.5*bler ...
+                      - 0.1*papr ...
+                      - 0.05*power_penalty;
+
+                %% Best Configuration
+
+                if score > best_score
+
+                    best_score = score;
+
+                    best_scs = scs;
+                    best_mcs = mcs;
+                    best_beam = beam;
+
+                end
+
+            end
+        end
+    end
+
+    labels_scs(i) = best_scs;
+    labels_mcs(i) = best_mcs;
+    labels_beam(i) = best_beam;
+
+end
+
+%% ==========================================
+% AI Training
+%% ==========================================
+
+X = [SINR doppler interference battery];
+
+model_scs = fitctree(X, labels_scs);
+model_mcs = fitctree(X, labels_mcs);
+model_beam = fitctree(X, labels_beam);
+
+%% ==========================================
+% Test Conditions
+%% ==========================================
+
+test = [
+    5   800  15  30;
+    10  500  10  50;
+    18  200   5  80;
+    25   50   2  90
+];
+
+%% AI Predictions
+
+pred_scs = predict(model_scs, test);
+pred_mcs = predict(model_mcs, test);
+pred_beam = predict(model_beam, test);
+
+%% ==========================================
+% Display Results
+%% ==========================================
+
+disp('======================================================')
+disp(' SINR  Doppler  Interference Battery')
+disp(test)
+
+disp('======================================================')
+disp(' AI Selected SCS (kHz)')
+disp(pred_scs)
+
+disp('======================================================')
+disp(' AI Selected MCS')
+disp(pred_mcs)
+
+disp('======================================================')
+disp(' AI Selected Beamforming Gain (dB)')
+disp(pred_beam)
+
+%% ==========================================
+% Visualization
+%% ==========================================
+
+figure;
+
+scatter3(doppler, SINR, labels_scs, 20, labels_scs, 'filled');
+
+xlabel('Doppler (Hz)');
+ylabel('SINR (dB)');
+zlabel('Selected SCS');
+
+title('AI-Based Adaptive SCS Selection');
+
+grid on;
+
+%% ==========================================
+% Throughput Comparison
+%% ==========================================
+
+fixed_tp = [];
+ai_tp = [];
+
+for i = 1:N
+
+    %% Fixed System
+
+    fixed_scs = 30;
+    fixed_mcs = 4;
+
+    fixed_sinr = SINR(i);
+
+    fixed_bler = exp(-(fixed_sinr/10));
+
+    fixed_tp(i) = fixed_mcs*(1-fixed_bler);
+
+    %% AI System
+
+    ai_sinr = SINR(i) ...
+            + labels_beam(i) ...
+            - interference(i)/4;
+
+    ai_bler = exp(-(ai_sinr/10)) ...
+            + 0.001*(doppler(i)/labels_scs(i));
+
+    ai_bler = min(ai_bler,1);
+
+    ai_tp(i) = labels_mcs(i)*(1-ai_bler);
+
+end
+
+%% Average Throughput
+
+avg_fixed = mean(fixed_tp);
+avg_ai = mean(ai_tp);
+
+disp('======================================================')
+disp(['Average Throughput Fixed System = ', num2str(avg_fixed)])
+
+disp(['Average Throughput AI System    = ', num2str(avg_ai)])
+
+%% Plot
+
+figure;
+
+bar([avg_fixed avg_ai]);
+
+set(gca,'XTickLabel',{'Fixed','AI-Based'});
+
+ylabel('Average Throughput');
+
+title('AI vs Fixed Wireless System');
+
+grid on;
